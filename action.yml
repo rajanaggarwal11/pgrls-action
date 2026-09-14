@@ -1,0 +1,169 @@
+name: "pgrls audit"
+description: "Fail the build when a Postgres table is not protected by row-level security. Runs the pgrls audit as your application's role."
+author: "Rajan Aggarwal"
+
+branding:
+  icon: "lock"
+  color: "orange"
+
+inputs:
+  database-url:
+    description: >-
+      Connection URL for the role your APPLICATION connects with — not a superuser, which
+      bypasses RLS and cannot see policies. Pass a secret. It never reaches the log, the
+      summary, or an error message.
+    required: true
+  schema:
+    description: "Schemas to inspect, comma-separated."
+    required: false
+    default: "public"
+  exclude:
+    description: "Tables to skip, comma-separated, as name or schema.name (e.g. __drizzle_migrations)."
+    required: false
+    default: ""
+  allow-unforced:
+    description: "Count a table with RLS enabled but not FORCED as protected."
+    required: false
+    default: "false"
+  allow-bypassing-role:
+    description: "Accept a report gathered as a superuser or BYPASSRLS role. It proves nothing about that connection; the default refuses it."
+    required: false
+    default: "false"
+  version:
+    description: "Version of pgrls to run, as an npm dist-tag or exact version."
+    required: false
+    default: "latest"
+  fail-on-findings:
+    description: "Fail the step when a table is unprotected. Set false to report without blocking. A failed connection always fails the step."
+    required: false
+    default: "true"
+
+outputs:
+  tables:
+    description: "Tables inspected."
+    value: ${{ steps.run.outputs.tables }}
+  unprotected:
+    description: "Tables not protected."
+    value: ${{ steps.run.outputs.unprotected }}
+  no-rls:
+    description: "Unprotected because row-level security is not enabled."
+    value: ${{ steps.run.outputs.no-rls }}
+  not-forced:
+    description: "Unprotected because RLS is enabled but not forced — the owner bypasses it."
+    value: ${{ steps.run.outputs.not-forced }}
+  no-policies:
+    description: "Unprotected because RLS is on but no policy exists — nothing can be read at all, or everything can, depending on the role."
+    value: ${{ steps.run.outputs.no-policies }}
+  role:
+    description: "The role the audit ran as."
+    value: ${{ steps.run.outputs.role }}
+  bypasses:
+    description: "true when that role bypasses RLS, so the report proves nothing."
+    value: ${{ steps.run.outputs.bypasses }}
+  report:
+    description: "Path to the JSON report on the runner."
+    value: ${{ steps.run.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      shell: bash
+      env:
+        DATABASE_URL: ${{ inputs.database-url }}
+        PG_SCHEMA: ${{ inputs.schema }}
+        PG_EXCLUDE: ${{ inputs.exclude }}
+        PG_ALLOW_UNFORCED: ${{ inputs.allow-unforced }}
+        PG_ALLOW_BYPASS: ${{ inputs.allow-bypassing-role }}
+        PG_VERSION: ${{ inputs.version }}
+        PG_FAIL: ${{ inputs.fail-on-findings }}
+      run: |
+        # GitHub runs a composite `shell: bash` step as `bash -e -o pipefail`
+        # whether or not the script asks for it. Under -e, the moment the CLI
+        # exits 1 with findings the step dies here — before the exit code is
+        # captured, before the JSON pass, before any output is written. So the
+        # exit code is captured on the same line, which -e leaves alone.
+
+        if [ -z "$DATABASE_URL" ]; then
+          echo "::error::pgrls: the 'database-url' input is empty."
+          exit 2
+        fi
+
+        # The URL reaches the CLI only through the environment — never argv, so
+        # it is not in the process list — and everything the CLI prints passes
+        # through a filter that replaces the password (raw and URL-encoded)
+        # before it can reach the log. Belt and braces: the CLI redacts too.
+        redact="${RUNNER_TEMP}/pgrls-redact.js"
+        cat > "$redact" <<'JS'
+        const secrets = [];
+        try {
+          const u = new URL(process.env.DATABASE_URL);
+          const pw = decodeURIComponent(u.password);
+          if (pw) secrets.push(pw, encodeURIComponent(pw), u.password);
+        } catch {}
+        let buf = "";
+        process.stdin.on("data", (c) => { buf += c; });
+        process.stdin.on("end", () => {
+          for (const s of new Set(secrets.filter(Boolean))) buf = buf.split(s).join("***");
+          process.stdout.write(buf);
+        });
+        JS
+
+        args=()
+        IFS=',' read -ra schemas <<< "$PG_SCHEMA"
+        for s in "${schemas[@]}"; do s="${s// /}"; [ -n "$s" ] && args+=(--schema "$s"); done
+        IFS=',' read -ra excludes <<< "$PG_EXCLUDE"
+        for t in "${excludes[@]}"; do t="${t// /}"; [ -n "$t" ] && args+=(--exclude "$t"); done
+        [ "$PG_ALLOW_UNFORCED" = "true" ] && args+=(--allow-unforced)
+        [ "$PG_ALLOW_BYPASS" = "true" ] && args+=(--allow-bypassing-role)
+
+        pkg="pgrls@${PG_VERSION}"
+        report="${RUNNER_TEMP}/pgrls.json"
+        log="${RUNNER_TEMP}/pgrls.log"
+
+        echo "::group::pgrls audit"
+        status=0
+        npx --yes "$pkg" audit "${args[@]}" 2>&1 | node "$redact" | tee "$log" || status=$?
+        echo "::endgroup::"
+
+        if [ "$status" -eq 2 ]; then
+          echo "::error::pgrls could not run the audit. See the log above — the connection URL is not shown."
+          exit 2
+        fi
+
+        npx --yes "$pkg" audit "${args[@]}" --json 2>/dev/null > "$report" || true
+        if [ ! -s "$report" ]; then
+          echo "::error::pgrls produced no report. Check the log above."
+          exit "${status:-2}"
+        fi
+
+        node -e '
+          const fs = require("fs");
+          const r = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+          const s = r.summary;
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, [
+            `tables=${s.tables}`, `unprotected=${s.unprotected}`,
+            `no-rls=${s.byProblem["no-rls"]}`, `not-forced=${s.byProblem["not-forced"]}`, `no-policies=${s.byProblem["no-policies"]}`,
+            `role=${r.role.name}`, `bypasses=${r.role.bypasses}`, `report=${process.argv[1]}`, ""].join("\n"));
+
+          const lines = ["## pgrls audit", "", `\`${r.database}\` on \`${r.host}\` as \`${r.role.name}\` · ${s.tables} table(s)`, ""];
+          if (r.role.bypasses) {
+            lines.push(`> ⚠️ \`${r.role.name}\` is a superuser or has BYPASSRLS. Row-level security is never applied to it, so this report proves nothing about this connection. Run the audit as the role your application uses.`, "");
+          }
+          if (s.unprotected === 0) {
+            lines.push(r.ok ? "Every table is protected." : "No unprotected tables found.");
+          } else {
+            lines.push(`**${s.unprotected} of ${s.tables} table(s) not protected** — ${s.byProblem["no-rls"]} without RLS, ${s.byProblem["not-forced"]} not forced, ${s.byProblem["no-policies"]} without policies.`, "");
+            lines.push("| Table | Problem | Why it matters |", "| --- | --- | --- |");
+            for (const t of r.unprotected.slice(0, 50)) {
+              lines.push(`| \`${t.schema}.${t.table}\` | \`${t.problem}\` | ${String(t.reason).replace(/\|/g, "\\|")} |`);
+            }
+            if (r.unprotected.length > 50) lines.push(`| | | …and ${r.unprotected.length - 50} more |`);
+          }
+          if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");
+        ' "$report"
+
+        if [ "$PG_FAIL" != "true" ]; then
+          exit 0
+        fi
+        exit "${status:-0}"

@@ -1,0 +1,143 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  # Weekly, because the action fetches pgrls@latest: a regression in a new
+  # release of the package should show up here before a user hits it.
+  schedule:
+    - cron: "0 7 * * 1"
+
+permissions:
+  contents: read
+
+env:
+  # Deliberately memorable: the leak test greps every artefact for it.
+  PGPASSWORD: pgrls-ci-secret-8f2c
+
+jobs:
+  exposed-tables:
+    name: reports the two unprotected tables, as the app role
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env: { POSTGRES_PASSWORD: pgrls-ci-secret-8f2c }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - run: psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f test/fixture.sql
+      - id: audit
+        uses: ./
+        with:
+          database-url: postgres://app:app-password@localhost:5432/postgres
+          fail-on-findings: false
+      - shell: bash
+        run: |
+          echo "role=${{ steps.audit.outputs.role }} bypasses=${{ steps.audit.outputs.bypasses }} tables=${{ steps.audit.outputs.tables }} unprotected=${{ steps.audit.outputs.unprotected }}"
+          [ "${{ steps.audit.outputs.bypasses }}" = "false" ] || { echo "app must not bypass RLS"; exit 1; }
+          [ "${{ steps.audit.outputs.tables }}" = "3" ] || { echo "expected 3 tables"; exit 1; }
+          [ "${{ steps.audit.outputs.unprotected }}" = "2" ] || { echo "expected 2 unprotected"; exit 1; }
+          [ "${{ steps.audit.outputs.no-rls }}" = "1" ] || { echo "expected 1 without RLS"; exit 1; }
+          [ "${{ steps.audit.outputs.not-forced }}" = "1" ] || { echo "expected 1 not forced"; exit 1; }
+          grep -q 'exposed_no_rls' "$GITHUB_STEP_SUMMARY" || { echo "summary must name the table"; exit 1; }
+
+  fails-the-build:
+    name: fails when a table is unprotected
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env: { POSTGRES_PASSWORD: pgrls-ci-secret-8f2c }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - run: psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f test/fixture.sql
+      - id: audit
+        continue-on-error: true
+        uses: ./
+        with:
+          database-url: postgres://app:app-password@localhost:5432/postgres
+      - shell: bash
+        run: |
+          [ "${{ steps.audit.outcome }}" = "failure" ] || { echo "expected failure, got ${{ steps.audit.outcome }}"; exit 1; }
+
+  clean-with-excludes:
+    name: passes once the exposed tables are excluded
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env: { POSTGRES_PASSWORD: pgrls-ci-secret-8f2c }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - run: psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f test/fixture.sql
+      - id: audit
+        uses: ./
+        with:
+          database-url: postgres://app:app-password@localhost:5432/postgres
+          exclude: exposed_no_rls, public.exposed_not_forced
+      - shell: bash
+        run: |
+          [ "${{ steps.audit.outputs.unprotected }}" = "0" ] || { echo "expected 0 unprotected"; exit 1; }
+          [ "${{ steps.audit.outputs.tables }}" = "1" ] || { echo "expected 1 table after excludes"; exit 1; }
+
+  refuses-a-superuser:
+    name: refuses a report gathered as a superuser
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env: { POSTGRES_PASSWORD: pgrls-ci-secret-8f2c }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - run: psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f test/fixture.sql
+      - id: audit
+        continue-on-error: true
+        uses: ./
+        with:
+          database-url: postgres://postgres:pgrls-ci-secret-8f2c@localhost:5432/postgres
+      - shell: bash
+        run: |
+          [ "${{ steps.audit.outcome }}" = "failure" ] || { echo "a superuser report must fail"; exit 1; }
+          [ "${{ steps.audit.outputs.bypasses }}" = "true" ] || { echo "bypasses must be reported"; exit 1; }
+          grep -q 'BYPASSRLS' "$GITHUB_STEP_SUMMARY" || { echo "summary must warn about the role"; exit 1; }
+
+  never-leaks-the-password:
+    name: the password never reaches the log, the summary, or the outputs
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env: { POSTGRES_PASSWORD: pgrls-ci-secret-8f2c }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - id: wrong-password
+        continue-on-error: true
+        uses: ./
+        with:
+          database-url: postgres://postgres:pgrls-ci-secret-8f2c-WRONG@localhost:5432/postgres
+      - id: wrong-host
+        continue-on-error: true
+        uses: ./
+        with:
+          database-url: postgres://postgres:pgrls-ci-secret-8f2c@nowhere.invalid:5432/postgres
+      - shell: bash
+        run: |
+          [ "${{ steps.wrong-password.outcome }}" = "failure" ] || { echo "a failed connection must fail the step"; exit 1; }
+          [ "${{ steps.wrong-host.outcome }}" = "failure" ] || { echo "a failed connection must fail the step"; exit 1; }
+          for f in "$RUNNER_TEMP/pgrls.log" "$GITHUB_STEP_SUMMARY" "$GITHUB_OUTPUT"; do
+            [ -f "$f" ] || continue
+            if grep -q 'pgrls-ci-secret' "$f"; then echo "PASSWORD LEAKED into $f"; exit 1; fi
+          done
+          echo "no leak in the captured log, the summary, or the outputs"
