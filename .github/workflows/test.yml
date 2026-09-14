@@ -77,7 +77,8 @@ jobs:
           [ "${{ steps.audit.outputs.unprotected }}" = "2" ] || { echo "expected 2 unprotected"; exit 1; }
           [ "${{ steps.audit.outputs.no-rls }}" = "1" ] || { echo "expected 1 without RLS"; exit 1; }
           [ "${{ steps.audit.outputs.not-forced }}" = "1" ] || { echo "expected 1 not forced"; exit 1; }
-          grep -q 'exposed_no_rls' "$GITHUB_STEP_SUMMARY" || { echo "summary must name the table"; exit 1; }
+          # $GITHUB_STEP_SUMMARY is a different file in every step; the action's log is shared.
+          grep -q 'exposed_no_rls' "$RUNNER_TEMP/pgrls.log" || { echo "the log must name the table"; exit 1; }
 
   fails-the-build:
     name: fails when a table is unprotected
@@ -170,7 +171,7 @@ jobs:
         run: |
           [ "${{ steps.audit.outcome }}" = "failure" ] || { echo "a superuser report must fail"; exit 1; }
           [ "${{ steps.audit.outputs.bypasses }}" = "true" ] || { echo "bypasses must be reported"; exit 1; }
-          grep -q 'BYPASSRLS' "$GITHUB_STEP_SUMMARY" || { echo "summary must warn about the role"; exit 1; }
+          grep -q 'superuser' "$RUNNER_TEMP/pgrls.log" || { echo "the log must say the role bypasses RLS"; exit 1; }
 
   never-leaks-the-password:
     name: the password never reaches the log, the summary, or the outputs
