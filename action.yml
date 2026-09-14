@@ -131,9 +131,10 @@ runs:
           exit 2
         fi
 
-        npx --yes "$pkg" audit "${args[@]}" --json 2>/dev/null > "$report" || true
+        npx --yes "$pkg" audit "${args[@]}" --json > "$report" 2> "${RUNNER_TEMP}/pgrls-json.err" || true
         if [ ! -s "$report" ]; then
-          echo "::error::pgrls produced no report. Check the log above."
+          echo "::error::pgrls produced no report. Is '$pkg' a version with the audit command (0.2.0 or newer)?"
+          node "$redact" < "${RUNNER_TEMP}/pgrls-json.err" | head -5
           exit "${status:-2}"
         fi
 
