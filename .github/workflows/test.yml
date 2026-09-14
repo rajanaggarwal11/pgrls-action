@@ -18,9 +18,35 @@ env:
   PGPASSWORD: pgrls-ci-secret-8f2c
 
 jobs:
+  build-pgrls:
+    name: build pgrls from source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: rajanaggarwal11/pgrls
+          path: pgrls
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: pgrls/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: |
+          cd pgrls
+          pnpm install --frozen-lockfile
+          pnpm build
+          mkdir -p "$RUNNER_TEMP/out"
+          pnpm pack --pack-destination "$RUNNER_TEMP/out"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pgrls-tgz
+          path: ${{ runner.temp }}/out/*.tgz
+
   exposed-tables:
     name: reports the two unprotected tables, as the app role
     runs-on: ubuntu-latest
+    needs: build-pgrls
     services:
       postgres:
         image: postgres:17
@@ -29,10 +55,18 @@ jobs:
         options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          name: pgrls-tgz
+          path: ${{ runner.temp }}/pgrls
+      - id: tgz
+        shell: bash
+        run: echo "path=$(ls "$RUNNER_TEMP"/pgrls/*.tgz)" >> "$GITHUB_OUTPUT"
       - run: psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f test/fixture.sql
       - id: audit
         uses: ./
         with:
+          version: ${{ steps.tgz.outputs.path }}
           database-url: postgres://app:app-password@localhost:5432/postgres
           fail-on-findings: false
       - shell: bash
@@ -48,6 +82,7 @@ jobs:
   fails-the-build:
     name: fails when a table is unprotected
     runs-on: ubuntu-latest
+    needs: build-pgrls
     services:
       postgres:
         image: postgres:17
@@ -56,11 +91,19 @@ jobs:
         options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          name: pgrls-tgz
+          path: ${{ runner.temp }}/pgrls
+      - id: tgz
+        shell: bash
+        run: echo "path=$(ls "$RUNNER_TEMP"/pgrls/*.tgz)" >> "$GITHUB_OUTPUT"
       - run: psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f test/fixture.sql
       - id: audit
         continue-on-error: true
         uses: ./
         with:
+          version: ${{ steps.tgz.outputs.path }}
           database-url: postgres://app:app-password@localhost:5432/postgres
       - shell: bash
         run: |
@@ -69,6 +112,7 @@ jobs:
   clean-with-excludes:
     name: passes once the exposed tables are excluded
     runs-on: ubuntu-latest
+    needs: build-pgrls
     services:
       postgres:
         image: postgres:17
@@ -77,10 +121,18 @@ jobs:
         options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          name: pgrls-tgz
+          path: ${{ runner.temp }}/pgrls
+      - id: tgz
+        shell: bash
+        run: echo "path=$(ls "$RUNNER_TEMP"/pgrls/*.tgz)" >> "$GITHUB_OUTPUT"
       - run: psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f test/fixture.sql
       - id: audit
         uses: ./
         with:
+          version: ${{ steps.tgz.outputs.path }}
           database-url: postgres://app:app-password@localhost:5432/postgres
           exclude: exposed_no_rls, public.exposed_not_forced
       - shell: bash
@@ -91,6 +143,7 @@ jobs:
   refuses-a-superuser:
     name: refuses a report gathered as a superuser
     runs-on: ubuntu-latest
+    needs: build-pgrls
     services:
       postgres:
         image: postgres:17
@@ -99,11 +152,19 @@ jobs:
         options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          name: pgrls-tgz
+          path: ${{ runner.temp }}/pgrls
+      - id: tgz
+        shell: bash
+        run: echo "path=$(ls "$RUNNER_TEMP"/pgrls/*.tgz)" >> "$GITHUB_OUTPUT"
       - run: psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f test/fixture.sql
       - id: audit
         continue-on-error: true
         uses: ./
         with:
+          version: ${{ steps.tgz.outputs.path }}
           database-url: postgres://postgres:pgrls-ci-secret-8f2c@localhost:5432/postgres
       - shell: bash
         run: |
@@ -114,6 +175,7 @@ jobs:
   never-leaks-the-password:
     name: the password never reaches the log, the summary, or the outputs
     runs-on: ubuntu-latest
+    needs: build-pgrls
     services:
       postgres:
         image: postgres:17
@@ -122,15 +184,24 @@ jobs:
         options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          name: pgrls-tgz
+          path: ${{ runner.temp }}/pgrls
+      - id: tgz
+        shell: bash
+        run: echo "path=$(ls "$RUNNER_TEMP"/pgrls/*.tgz)" >> "$GITHUB_OUTPUT"
       - id: wrong-password
         continue-on-error: true
         uses: ./
         with:
+          version: ${{ steps.tgz.outputs.path }}
           database-url: postgres://postgres:pgrls-ci-secret-8f2c-WRONG@localhost:5432/postgres
       - id: wrong-host
         continue-on-error: true
         uses: ./
         with:
+          version: ${{ steps.tgz.outputs.path }}
           database-url: postgres://postgres:pgrls-ci-secret-8f2c@nowhere.invalid:5432/postgres
       - shell: bash
         run: |

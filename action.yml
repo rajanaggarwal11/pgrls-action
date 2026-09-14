@@ -30,7 +30,7 @@ inputs:
     required: false
     default: "false"
   version:
-    description: "Version of pgrls to run, as an npm dist-tag or exact version."
+    description: "Version of pgrls to run: an npm dist-tag or version, or the path of a packed tarball (to test an unreleased build)."
     required: false
     default: "latest"
   fail-on-findings:
@@ -117,13 +117,18 @@ runs:
         [ "$PG_ALLOW_UNFORCED" = "true" ] && args+=(--allow-unforced)
         [ "$PG_ALLOW_BYPASS" = "true" ] && args+=(--allow-bypassing-role)
 
-        pkg="pgrls@${PG_VERSION}"
+        # A dist-tag or version from npm, or a path to a packed tarball (a build
+        # of an unreleased pgrls — the self-test uses this).
+        case "$PG_VERSION" in
+          *.tgz|file:*|/*|./*) pkg="${PG_VERSION#file:}" ;;
+          *) pkg="pgrls@${PG_VERSION}" ;;
+        esac
         report="${RUNNER_TEMP}/pgrls.json"
         log="${RUNNER_TEMP}/pgrls.log"
 
         echo "::group::pgrls audit"
         status=0
-        npx --yes "$pkg" audit "${args[@]}" 2>&1 | node "$redact" | tee "$log" || status=$?
+        npx --yes --package "$pkg" pgrls audit "${args[@]}" 2>&1 | node "$redact" | tee "$log" || status=$?
         echo "::endgroup::"
 
         if [ "$status" -eq 2 ]; then
@@ -131,7 +136,7 @@ runs:
           exit 2
         fi
 
-        npx --yes "$pkg" audit "${args[@]}" --json > "$report" 2> "${RUNNER_TEMP}/pgrls-json.err" || true
+        npx --yes --package "$pkg" pgrls audit "${args[@]}" --json > "$report" 2> "${RUNNER_TEMP}/pgrls-json.err" || true
         if [ ! -s "$report" ]; then
           echo "::error::pgrls produced no report. Is '$pkg' a version with the audit command (0.2.0 or newer)?"
           node "$redact" < "${RUNNER_TEMP}/pgrls-json.err" | head -5

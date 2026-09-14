@@ -24,7 +24,7 @@ It is passed to the CLI through the environment, not `argv`; everything the CLI 
 | `allow-unforced`       | `false`    | Count RLS-enabled-but-not-forced as protected. (The table owner bypasses unforced RLS.)               |
 | `allow-bypassing-role` | `false`    | Accept a report gathered as a superuser / `BYPASSRLS` role.                                           |
 | `fail-on-findings`     | `true`     | `false` reports without blocking. A failed connection or a refused role still fails the step.         |
-| `version`              | `latest`   | pgrls version or dist-tag. The audit command needs 0.2.0 or newer.                                    |
+| `version`              | `latest`   | pgrls version or dist-tag, or the path of a packed tarball. The audit command needs 0.2.0 or newer. |
 
 ## Outputs
 
