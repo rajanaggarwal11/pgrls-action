@@ -148,33 +148,7 @@ runs:
           exit "${status:-2}"
         fi
 
-        node -e '
-          const fs = require("fs");
-          const r = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-          const s = r.summary;
-          // Role names can hold any character, a newline included: one line per output.
-          const oneLine = (v) => String(v ?? "").replace(/[\u0000-\u001f\u007f]+/g, " ");
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, [
-            `tables=${Number(s.tables)}`, `unprotected=${Number(s.unprotected)}`,
-            `no-rls=${Number(s.byProblem["no-rls"])}`, `not-forced=${Number(s.byProblem["not-forced"])}`, `no-policies=${Number(s.byProblem["no-policies"])}`,
-            `role=${oneLine(r.role.name)}`, `bypasses=${r.role.bypasses === true}`, `report=${process.argv[1]}`, ""].join("\n"));
-
-          const lines = ["## pgrls audit", "", `\`${r.database}\` on \`${r.host}\` as \`${r.role.name}\` · ${s.tables} table(s)`, ""];
-          if (r.role.bypasses) {
-            lines.push(`> ⚠️ \`${r.role.name}\` is a superuser or has BYPASSRLS. Row-level security is never applied to it, so this report proves nothing about this connection. Run the audit as the role your application uses.`, "");
-          }
-          if (s.unprotected === 0) {
-            lines.push(r.ok ? "Every table is protected." : "No unprotected tables found.");
-          } else {
-            lines.push(`**${s.unprotected} of ${s.tables} table(s) not protected** — ${s.byProblem["no-rls"]} without RLS, ${s.byProblem["not-forced"]} not forced, ${s.byProblem["no-policies"]} without policies.`, "");
-            lines.push("| Table | Problem | Why it matters |", "| --- | --- | --- |");
-            for (const t of r.unprotected.slice(0, 50)) {
-              lines.push(`| \`${t.schema}.${t.table}\` | \`${t.problem}\` | ${String(t.reason).replace(/\|/g, "\\|")} |`);
-            }
-            if (r.unprotected.length > 50) lines.push(`| | | …and ${r.unprotected.length - 50} more |`);
-          }
-          if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");
-        ' "$report"
+        node "$GITHUB_ACTION_PATH/lib/report.mjs" "$report"
 
         if [ "$PG_FAIL" != "true" ]; then
           exit 0

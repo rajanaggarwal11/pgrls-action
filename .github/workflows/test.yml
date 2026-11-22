@@ -237,3 +237,12 @@ jobs:
             if grep -q 'pgrls-ci-secret' "$f"; then echo "PASSWORD LEAKED into $f"; exit 1; fi
           done
           echo "no leak in the captured log, the summary, or the outputs"
+
+  report-is-safe:
+    name: hostile identifiers cannot forge outputs or inject markup into the summary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - shell: bash
+        run: node test/check-report.mjs

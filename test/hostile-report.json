@@ -1,0 +1,11 @@
+{
+  "database": "app<img src=x onerror=alert(1)>",
+  "host": "db`\n## forged",
+  "ok": false,
+  "role": { "name": "app\nunprotected=0\nbypasses=false", "bypasses": true },
+  "summary": { "tables": 3, "unprotected": 2, "byProblem": { "no-rls": 1, "not-forced": 1, "no-policies": 0 } },
+  "unprotected": [
+    { "schema": "public", "table": "t<script>alert(1)</script>", "problem": "no-rls", "reason": "nobody | enabled **RLS** [link](https://example.invalid)" },
+    { "schema": "pub lic", "table": "x\u0085y", "problem": "not-forced", "reason": "<details open>owner bypasses it" }
+  ]
+}
