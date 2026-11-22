@@ -5,8 +5,8 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
-  # Weekly, because the action fetches pgrls@latest: a regression in a new
-  # release of the package should show up here before a user hits it.
+  # Weekly, so a change on pgrls's main branch or in the runner image that
+  # breaks the action shows up here before the next release does.
   schedule:
     - cron: "0 7 * * 1"
 
@@ -22,14 +22,15 @@ jobs:
     name: build pgrls from source
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: rajanaggarwal11/pgrls
           path: pgrls
-      - uses: pnpm/action-setup@v4
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           package_json_file: pgrls/package.json
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - run: |
@@ -38,7 +39,7 @@ jobs:
           pnpm build
           mkdir -p "$RUNNER_TEMP/out"
           pnpm pack --pack-destination "$RUNNER_TEMP/out"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pgrls-tgz
           path: ${{ runner.temp }}/out/*.tgz
@@ -54,8 +55,9 @@ jobs:
         ports: ["5432:5432"]
         options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: pgrls-tgz
           path: ${{ runner.temp }}/pgrls
@@ -70,13 +72,20 @@ jobs:
           database-url: postgres://app:app-password@localhost:5432/postgres
           fail-on-findings: false
       - shell: bash
+        env:
+          ROLE: ${{ steps.audit.outputs.role }}
+          BYPASSES: ${{ steps.audit.outputs.bypasses }}
+          TABLES: ${{ steps.audit.outputs.tables }}
+          UNPROTECTED: ${{ steps.audit.outputs.unprotected }}
+          NO_RLS: ${{ steps.audit.outputs.no-rls }}
+          NOT_FORCED: ${{ steps.audit.outputs.not-forced }}
         run: |
-          echo "role=${{ steps.audit.outputs.role }} bypasses=${{ steps.audit.outputs.bypasses }} tables=${{ steps.audit.outputs.tables }} unprotected=${{ steps.audit.outputs.unprotected }}"
-          [ "${{ steps.audit.outputs.bypasses }}" = "false" ] || { echo "app must not bypass RLS"; exit 1; }
-          [ "${{ steps.audit.outputs.tables }}" = "3" ] || { echo "expected 3 tables"; exit 1; }
-          [ "${{ steps.audit.outputs.unprotected }}" = "2" ] || { echo "expected 2 unprotected"; exit 1; }
-          [ "${{ steps.audit.outputs.no-rls }}" = "1" ] || { echo "expected 1 without RLS"; exit 1; }
-          [ "${{ steps.audit.outputs.not-forced }}" = "1" ] || { echo "expected 1 not forced"; exit 1; }
+          echo "role=$ROLE bypasses=$BYPASSES tables=$TABLES unprotected=$UNPROTECTED"
+          [ "$BYPASSES" = "false" ] || { echo "app must not bypass RLS"; exit 1; }
+          [ "$TABLES" = "3" ] || { echo "expected 3 tables"; exit 1; }
+          [ "$UNPROTECTED" = "2" ] || { echo "expected 2 unprotected"; exit 1; }
+          [ "$NO_RLS" = "1" ] || { echo "expected 1 without RLS"; exit 1; }
+          [ "$NOT_FORCED" = "1" ] || { echo "expected 1 not forced"; exit 1; }
           # $GITHUB_STEP_SUMMARY is a different file in every step; the action's log is shared.
           grep -q 'exposed_no_rls' "$RUNNER_TEMP/pgrls.log" || { echo "the log must name the table"; exit 1; }
 
@@ -91,8 +100,9 @@ jobs:
         ports: ["5432:5432"]
         options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: pgrls-tgz
           path: ${{ runner.temp }}/pgrls
@@ -107,8 +117,10 @@ jobs:
           version: ${{ steps.tgz.outputs.path }}
           database-url: postgres://app:app-password@localhost:5432/postgres
       - shell: bash
+        env:
+          OUTCOME: ${{ steps.audit.outcome }}
         run: |
-          [ "${{ steps.audit.outcome }}" = "failure" ] || { echo "expected failure, got ${{ steps.audit.outcome }}"; exit 1; }
+          [ "$OUTCOME" = "failure" ] || { echo "expected failure, got $OUTCOME"; exit 1; }
 
   clean-with-excludes:
     name: passes once the exposed tables are excluded
@@ -121,8 +133,9 @@ jobs:
         ports: ["5432:5432"]
         options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: pgrls-tgz
           path: ${{ runner.temp }}/pgrls
@@ -137,9 +150,12 @@ jobs:
           database-url: postgres://app:app-password@localhost:5432/postgres
           exclude: exposed_no_rls, public.exposed_not_forced
       - shell: bash
+        env:
+          UNPROTECTED: ${{ steps.audit.outputs.unprotected }}
+          TABLES: ${{ steps.audit.outputs.tables }}
         run: |
-          [ "${{ steps.audit.outputs.unprotected }}" = "0" ] || { echo "expected 0 unprotected"; exit 1; }
-          [ "${{ steps.audit.outputs.tables }}" = "1" ] || { echo "expected 1 table after excludes"; exit 1; }
+          [ "$UNPROTECTED" = "0" ] || { echo "expected 0 unprotected"; exit 1; }
+          [ "$TABLES" = "1" ] || { echo "expected 1 table after excludes"; exit 1; }
 
   refuses-a-superuser:
     name: refuses a report gathered as a superuser
@@ -152,8 +168,9 @@ jobs:
         ports: ["5432:5432"]
         options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: pgrls-tgz
           path: ${{ runner.temp }}/pgrls
@@ -168,9 +185,12 @@ jobs:
           version: ${{ steps.tgz.outputs.path }}
           database-url: postgres://postgres:pgrls-ci-secret-8f2c@localhost:5432/postgres
       - shell: bash
+        env:
+          OUTCOME: ${{ steps.audit.outcome }}
+          BYPASSES: ${{ steps.audit.outputs.bypasses }}
         run: |
-          [ "${{ steps.audit.outcome }}" = "failure" ] || { echo "a superuser report must fail"; exit 1; }
-          [ "${{ steps.audit.outputs.bypasses }}" = "true" ] || { echo "bypasses must be reported"; exit 1; }
+          [ "$OUTCOME" = "failure" ] || { echo "a superuser report must fail"; exit 1; }
+          [ "$BYPASSES" = "true" ] || { echo "bypasses must be reported"; exit 1; }
           grep -q 'superuser' "$RUNNER_TEMP/pgrls.log" || { echo "the log must say the role bypasses RLS"; exit 1; }
 
   never-leaks-the-password:
@@ -184,8 +204,9 @@ jobs:
         ports: ["5432:5432"]
         options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: pgrls-tgz
           path: ${{ runner.temp }}/pgrls
@@ -205,9 +226,12 @@ jobs:
           version: ${{ steps.tgz.outputs.path }}
           database-url: postgres://postgres:pgrls-ci-secret-8f2c@nowhere.invalid:5432/postgres
       - shell: bash
+        env:
+          WRONG_PASSWORD_OUTCOME: ${{ steps.wrong-password.outcome }}
+          WRONG_HOST_OUTCOME: ${{ steps.wrong-host.outcome }}
         run: |
-          [ "${{ steps.wrong-password.outcome }}" = "failure" ] || { echo "a failed connection must fail the step"; exit 1; }
-          [ "${{ steps.wrong-host.outcome }}" = "failure" ] || { echo "a failed connection must fail the step"; exit 1; }
+          [ "$WRONG_PASSWORD_OUTCOME" = "failure" ] || { echo "a failed connection must fail the step"; exit 1; }
+          [ "$WRONG_HOST_OUTCOME" = "failure" ] || { echo "a failed connection must fail the step"; exit 1; }
           for f in "$RUNNER_TEMP/pgrls.log" "$GITHUB_STEP_SUMMARY" "$GITHUB_OUTPUT"; do
             [ -f "$f" ] || continue
             if grep -q 'pgrls-ci-secret' "$f"; then echo "PASSWORD LEAKED into $f"; exit 1; fi

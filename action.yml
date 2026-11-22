@@ -30,9 +30,13 @@ inputs:
     required: false
     default: "false"
   version:
-    description: "Version of pgrls to run: an npm dist-tag or version, or the path of a packed tarball (to test an unreleased build)."
+    description: >-
+      Version of pgrls to run. Defaults to the exact version this release of the action
+      was tested with, so `@v1` always runs a known build. The audit command needs 0.2.0
+      or newer. Set an exact version, an npm dist-tag (`latest`), or the path of a packed
+      tarball (to test an unreleased build).
     required: false
-    default: "latest"
+    default: "0.2.0"
   fail-on-findings:
     description: "Fail the step when a table is unprotected. Set false to report without blocking. A failed connection always fails the step."
     required: false
@@ -117,8 +121,9 @@ runs:
         [ "$PG_ALLOW_UNFORCED" = "true" ] && args+=(--allow-unforced)
         [ "$PG_ALLOW_BYPASS" = "true" ] && args+=(--allow-bypassing-role)
 
-        # A dist-tag or version from npm, or a path to a packed tarball (a build
-        # of an unreleased pgrls — the self-test uses this).
+        # A version or dist-tag from npm, or a path to a packed tarball (a build of an
+        # unreleased pgrls — the self-test uses this). An exact package spec, so npx runs
+        # this package at this version and nothing else.
         case "$PG_VERSION" in
           *.tgz|file:*|/*|./*) pkg="${PG_VERSION#file:}" ;;
           *) pkg="pgrls@${PG_VERSION}" ;;
@@ -147,10 +152,12 @@ runs:
           const fs = require("fs");
           const r = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
           const s = r.summary;
+          // Role names can hold any character, a newline included: one line per output.
+          const oneLine = (v) => String(v ?? "").replace(/[\u0000-\u001f\u007f]+/g, " ");
           fs.appendFileSync(process.env.GITHUB_OUTPUT, [
-            `tables=${s.tables}`, `unprotected=${s.unprotected}`,
-            `no-rls=${s.byProblem["no-rls"]}`, `not-forced=${s.byProblem["not-forced"]}`, `no-policies=${s.byProblem["no-policies"]}`,
-            `role=${r.role.name}`, `bypasses=${r.role.bypasses}`, `report=${process.argv[1]}`, ""].join("\n"));
+            `tables=${Number(s.tables)}`, `unprotected=${Number(s.unprotected)}`,
+            `no-rls=${Number(s.byProblem["no-rls"])}`, `not-forced=${Number(s.byProblem["not-forced"])}`, `no-policies=${Number(s.byProblem["no-policies"])}`,
+            `role=${oneLine(r.role.name)}`, `bypasses=${r.role.bypasses === true}`, `report=${process.argv[1]}`, ""].join("\n"));
 
           const lines = ["## pgrls audit", "", `\`${r.database}\` on \`${r.host}\` as \`${r.role.name}\` · ${s.tables} table(s)`, ""];
           if (r.role.bypasses) {
